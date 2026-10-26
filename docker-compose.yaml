@@ -1,0 +1,24 @@
+services:
+  home-bridge:
+    build: .
+    restart: unless-stopped
+    network_mode: host          # required for Switcher UDP discovery & Matter mDNS
+    volumes:
+      - config41:/app/config
+      - matter41:/data/matter
+    environment:
+      CONFIG_PATH: /app/config/config.yaml
+
+volumes:
+  config41:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${NFS_SERVER},nfsvers=4.1,rw"
+      device: ":${NFS_CONFIG_PATH}"
+  matter41:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${NFS_SERVER},nfsvers=4.1,rw"
+      device: ":${NFS_MATTER_PATH}"

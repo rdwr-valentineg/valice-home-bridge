@@ -1,0 +1,30 @@
+{
+  "name": "home-bridge",
+  "version": "0.1.0",
+  "description": "Matter bridge for home automation — Switcher, Zigbee2MQTT, Home Connect",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@matter/main": "^0.12.0",
+    "js-yaml": "^4.1.0",
+    "mqtt": "^5.16.1",
+    "qrcode": "^1.5.4",
+    "switcher-js2": "^1.8.1"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22",
+    "@types/qrcode": "^1.5.5",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

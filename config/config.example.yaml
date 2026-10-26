@@ -1,0 +1,52 @@
+matter:
+  storage: /data/matter  # persistent Matter identity, fabric keys, endpoint numbers
+  # port: 5540           # Matter UDP port (default 5540); env: MATTER_PORT
+
+admin:
+  port: 8081             # admin UI/API HTTP port (default 8081); env: ADMIN_PORT
+  # host: "127.0.0.1"    # bind address (default: all interfaces); env: ADMIN_HOST
+  # maxBodyBytes: 65536  # max request body size in bytes (default 64 KiB); env: ADMIN_MAX_BODY_BYTES
+
+# mqtt:
+#   broker: "mqtt://user:password@192.0.2.10:1883"
+
+devices:
+  # Switcher Breeze (AC unit) — find device_id via the Discover button in the admin UI
+  # - id: "aabb01"
+  #   adapter: switcher
+  #   type: thermostat
+  #   label: "Living Room AC"
+  #   room: "Living Room"
+
+  # Switcher Runner (motorised blinds)
+  # - id: "aabb02"
+  #   adapter: switcher
+  #   type: windowCovering
+  #   label: "Living Room Blinds"
+  #   room: "Living Room"
+
+  # Switcher V4 / Touch (power switch)
+  # - id: "aabb03"
+  #   adapter: switcher
+  #   type: light
+  #   label: "Bedroom Light"
+  #   room: "Bedroom"
+
+  # MQTT devices — requires mqtt.broker above
+  # Zigbee2MQTT (z2m): subscribes zigbee2mqtt/<mqttName>, publishes zigbee2mqtt/<mqttName>/set
+  # - id: office-light
+  #   adapter: mqtt
+  #   type: light
+  #   label: "Office Light"
+  #   room: "Office"
+  #   protocol: z2m
+  #   mqttName: "office_light"  # friendly name in Zigbee2MQTT
+  #
+  # Tasmota: subscribes stat/<mqttName>/RESULT + tele/<mqttName>/STATE
+  # - id: kitchen-plug
+  #   adapter: mqtt
+  #   type: light
+  #   label: "Kitchen Plug"
+  #   room: "Kitchen"
+  #   protocol: tasmota
+  #   mqttName: "tasmota_kitchen"  # Tasmota device topic name
