@@ -10,6 +10,14 @@ admin:
 # mqtt:
 #   broker: "mqtt://user:password@192.0.2.10:1883"
 
+# Switcher Breeze (AC) defaults, applied when an AC is turned on from off.
+# Mode and setpoint carry over from last use; these only fill in until the AC reports its own.
+# acDefaults:
+#   fan: low        # auto | low | medium | high
+#   swing: false
+#   mode: cool      # cool | heat | fan
+#   setpoint: 24
+
 devices:
   # Switcher Breeze (AC unit) — find device_id via the Discover button in the admin UI
   # - id: "aabb01"
@@ -17,6 +25,7 @@ devices:
   #   type: thermostat
   #   label: "Living Room AC"
   #   room: "Living Room"
+  #   acDefaults: { fan: medium }   # per-AC override of the top-level acDefaults
 
   # Switcher Runner (motorised blinds)
   # - id: "aabb02"

@@ -1,6 +1,6 @@
 import EventEmitter from 'events';
 import { createRequire } from 'module';
-import type { Adapter, Device, DeviceState, DeviceCommand, DeviceType } from '../../core/device.js';
+import type { Adapter, Device, DeviceState, DeviceCommand, DeviceType, FanLevel } from '../../core/device.js';
 
 const require = createRequire(import.meta.url);
 const Switcher = require('switcher-js2');
@@ -11,6 +11,33 @@ export interface SwitcherDeviceConfig {
   label: string;
   room?: string;
   token?: string;      // Base64 token from switcher.co.il/GetKey — required for sl01/sl02/sl03/s11/s12/heater
+  acDefaults?: AcDefaults;  // Breeze only: applied when the AC is turned on from off
+}
+
+export interface AcDefaults {
+  mode?: BreezeMode;    // used only until the AC has reported a mode of its own
+  setpoint?: number;    // °C, used only until the AC has reported a setpoint
+  fan?: FanLevel;
+  swing?: boolean;
+}
+
+type BreezeMode = Exclude<DeviceState['mode'], 'off' | undefined>;
+
+const BUILTIN_AC_DEFAULTS: Required<AcDefaults> = { mode: 'cool', setpoint: 24, fan: 'low', swing: false };
+
+// Apple Home often writes power, mode and setpoint in one burst. Each Breeze send is a
+// fresh TCP login + IR command, so separate sends can land out of order; coalesce them.
+const BREEZE_COALESCE_MS = 400;
+// After a send, keep using what we sent as the base for further commands until the
+// AC's own broadcast has had time to catch up.
+const BREEZE_RECENT_MS = 10_000;
+
+interface BreezeCommand {
+  power: 'ON' | 'OFF';
+  mode: BreezeMode;
+  setpoint: number;
+  fan: FanLevel;
+  swing: boolean;
 }
 
 interface SwitcherInfo {
@@ -38,6 +65,9 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
   private devices_: Map<string, Device> = new Map();
   private info: Map<string, SwitcherInfo> = new Map();
   private seen: Map<string, SeenDevice> = new Map();
+  private lastMode: Map<string, BreezeMode> = new Map();
+  private pendingBreeze: Map<string, { cmd: BreezeCommand; timer: NodeJS.Timeout }> = new Map();
+  private recentBreeze: Map<string, { cmd: BreezeCommand; at: number }> = new Map();
   private listener: { close(): Promise<void> } | null = null;
 
   constructor(private readonly configs: SwitcherDeviceConfig[]) {
@@ -87,6 +117,23 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
     const nfo = this.info.get(deviceId);
     if (!nfo) throw new Error(`[switcher] no IP known yet for ${deviceId}`);
 
+    if (nfo.deviceType === 'breeze') {
+      this.queueBreeze(deviceId, cmd);
+      return;
+    }
+
+    const sw = await this.connect(deviceId);
+    await this.runCommand(sw, deviceId, cmd);
+    // Do NOT call sw.close() here. set_position is fire-and-forget internally (it doesn't
+    // return a Promise). Calling close() would set _closed=true before its async TCP
+    // round-trip completes, crashing _getsocket(). TCP connections opened by those
+    // commands close themselves when the exchange is done.
+  }
+
+  private async connect(deviceId: string): Promise<SwitcherInstance> {
+    const nfo = this.info.get(deviceId);
+    if (!nfo) throw new Error(`[switcher] no IP known yet for ${deviceId}`);
+
     // Constructor signature is (id, ip, log, listen, type, remote, token, key):
     // `token` is the Base64 GetKey token (sl01/sl02/sl03/s11/s12/heater — the library
     // converts it via he()), `key` is the device_key from the UDP broadcast, used by
@@ -105,33 +152,100 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
     if (nfo.deviceType === 'breeze') {
       await waitForCapabilities(sw);
     }
+    return sw;
+  }
 
-    await this.runCommand(sw, deviceId, cmd);
-    // Do NOT call sw.close() here. set_breeze_command / set_position are fire-and-forget
-    // internally (they don't return a Promise). Calling close() would set _closed=true
-    // before their async TCP round-trip completes, crashing _getsocket(). TCP connections
-    // opened by those commands close themselves when the exchange is done.
+  private acDefaults(deviceId: string): Required<AcDefaults> {
+    const cfg = this.configs.find(c => c.id === deviceId);
+    return { ...BUILTIN_AC_DEFAULTS, ...cfg?.acDefaults };
+  }
+
+  private currentBreeze(deviceId: string): BreezeCommand {
+    const pending = this.pendingBreeze.get(deviceId);
+    if (pending) return { ...pending.cmd };
+    const recent = this.recentBreeze.get(deviceId);
+    if (recent && Date.now() - recent.at < BREEZE_RECENT_MS) return { ...recent.cmd };
+
+    const d = this.acDefaults(deviceId);
+    const st = this.devices_.get(deviceId)!.state;
+    const on = st.mode !== undefined && st.mode !== 'off';
+    return {
+      power: on ? 'ON' : 'OFF',
+      mode: on ? st.mode as BreezeMode : this.lastMode.get(deviceId) ?? d.mode,
+      setpoint: st.setpoint ?? d.setpoint,
+      fan: st.fan ?? d.fan,
+      swing: st.swing ?? d.swing,
+    };
+  }
+
+  private queueBreeze(deviceId: string, cmd: DeviceCommand): void {
+    const next = this.currentBreeze(deviceId);
+    const wasOn = next.power === 'ON';
+    // Turning on from off starts from the configured fan/swing defaults, not whatever
+    // the AC was last left at; mode and setpoint carry over from last use.
+    const turnOn = () => {
+      if (wasOn) return;
+      const d = this.acDefaults(deviceId);
+      next.power = 'ON';
+      next.fan = d.fan;
+      next.swing = d.swing;
+    };
+
+    switch (cmd.type) {
+      case 'setOn':
+        if (cmd.value) turnOn(); else next.power = 'OFF';
+        break;
+      case 'toggle':
+        if (wasOn) next.power = 'OFF'; else turnOn();
+        break;
+      case 'setMode':
+        if (cmd.value === 'off' || cmd.value === undefined) next.power = 'OFF';
+        else { turnOn(); next.mode = cmd.value; }
+        break;
+      case 'setSetpoint':
+        turnOn();
+        next.setpoint = Math.round(cmd.value);  // IR table has whole degrees only; Apple sends 0.5 steps
+        break;
+      default:
+        log(`unhandled command type for breeze: ${cmd.type}`);
+        return;
+    }
+
+    const pending = this.pendingBreeze.get(deviceId);
+    if (pending) clearTimeout(pending.timer);
+    const timer = setTimeout(() => void this.flushBreeze(deviceId), BREEZE_COALESCE_MS);
+    this.pendingBreeze.set(deviceId, { cmd: next, timer });
+  }
+
+  private async flushBreeze(deviceId: string): Promise<void> {
+    const pending = this.pendingBreeze.get(deviceId);
+    if (!pending) return;
+    this.pendingBreeze.delete(deviceId);
+    const c = pending.cmd;
+    this.recentBreeze.set(deviceId, { cmd: c, at: Date.now() });
+    try {
+      const sw = await this.connect(deviceId);
+      sw.set_breeze_command({
+        power: c.power,
+        mode: deviceModeToSwitcher(c.mode),
+        fan_level: c.fan.toUpperCase(),
+        swing: c.swing ? 'ON' : 'OFF',
+        target_temp: c.setpoint,
+      });
+    } catch (err: unknown) {
+      log(`breeze command to ${deviceId} failed:`, err instanceof Error ? err.message : String(err));
+    }
   }
 
   private async runCommand(sw: SwitcherInstance, deviceId: string, cmd: DeviceCommand): Promise<void> {
     const dev = this.devices_.get(deviceId);
     if (!dev) return;
     const nfo = this.info.get(deviceId)!;
-    const isBreeze = nfo.deviceType === 'breeze';
     const isLight = /^sl(mini)?0\d$/.test(nfo.deviceType);
 
     switch (cmd.type) {
       case 'setOn':
-        if (isBreeze) {
-          // Breeze devices must use set_breeze_command — turn_on/turn_off send the
-          // wrong protocol and cause the device to close the TCP connection immediately.
-          sw.set_breeze_command({
-            power: cmd.value ? 'ON' : 'OFF',
-            mode: deviceModeToSwitcher(dev.state.mode ?? 'cool'),
-            fan_level: 'AUTO',
-            target_temp: Math.round(dev.state.setpoint ?? 24),
-          });
-        } else if (isLight) {
+        if (isLight) {
           // Circuit index is 1-based on the wire (aioswitcher: get_light_api_packet_index);
           // index 0 makes switcher-js2 omit the circuit byte and the device ignores it.
           await sw.set_light(cmd.value, 1);
@@ -141,36 +255,11 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
         break;
 
       case 'toggle':
-        if (isBreeze) {
-          sw.set_breeze_command({
-            power: dev.state.on ? 'OFF' : 'ON',
-            mode: deviceModeToSwitcher(dev.state.mode ?? 'cool'),
-            fan_level: 'AUTO',
-            target_temp: Math.round(dev.state.setpoint ?? 24),
-          });
-        } else if (isLight) {
+        if (isLight) {
           await sw.set_light(!dev.state.on, 1);
         } else {
           await (dev.state.on ? sw.turn_off() : sw.turn_on());
         }
-        break;
-
-      case 'setMode':
-        sw.set_breeze_command({
-          power: cmd.value === 'off' ? 'OFF' : 'ON',
-          mode: deviceModeToSwitcher(cmd.value),
-          fan_level: 'AUTO',
-          target_temp: Math.round(dev.state.setpoint ?? 24),
-        });
-        break;
-
-      case 'setSetpoint':
-        sw.set_breeze_command({
-          power: 'ON',
-          mode: deviceModeToSwitcher(dev.state.mode ?? 'cool'),
-          fan_level: 'AUTO',
-          target_temp: Math.round(cmd.value),  // IR table has whole degrees only; Apple sends 0.5 steps
-        });
         break;
 
       case 'setPosition':
@@ -214,9 +303,13 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
 
     if (msg.type === 'breeze' && msg.state) {
       const s = msg.state as BreezeState;
-      partial.mode = s.power === 'OFF' ? 'off' : switcherModeToDevice(s.mode);
+      const mode = switcherModeToDevice(s.mode);
+      this.lastMode.set(cfg.id, mode as BreezeMode);
+      partial.mode = s.power === 'OFF' ? 'off' : mode;
       partial.setpoint = s.target_temp;
       partial.currentTemp = s.current_temp;
+      partial.fan = toFanLevel(s.fan_level);
+      partial.swing = s.swing === 'ON';
     } else if (msg.type?.includes('runner') && msg.state) {
       const s = msg.state as RunnerState;
       // Switcher runner convention: 0 = fully open, 100 = fully closed.
@@ -264,6 +357,11 @@ function switcherModeToDevice(mode: string): DeviceState['mode'] {
     case 'FAN':  return 'fan';
     default:     return 'cool';
   }
+}
+
+function toFanLevel(level: string | undefined): FanLevel | undefined {
+  const l = level?.toLowerCase();
+  return l === 'auto' || l === 'low' || l === 'medium' || l === 'high' ? l : undefined;
 }
 
 function deviceModeToSwitcher(mode: DeviceState['mode']): string {
@@ -317,7 +415,7 @@ interface SwitcherInstance {
   turn_on(): Promise<void>;
   turn_off(): Promise<void>;
   set_light(power: boolean, index: number): Promise<void>;
-  set_breeze_command(state: { power: string; mode: string; fan_level: string; target_temp: number }): void;
+  set_breeze_command(state: { power: string; mode: string; fan_level: string; swing: string; target_temp: number }): void;
   set_position(pos: number): void;
   close(): void;
 }

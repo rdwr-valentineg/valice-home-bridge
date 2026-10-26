@@ -5,7 +5,7 @@ import yaml from 'js-yaml';
 import { DeviceRegistry } from './core/registry.js';
 import { MatterBridge } from './core/matter/server.js';
 import { FakeAdapter } from './adapters/fake/index.js';
-import { SwitcherAdapter } from './adapters/switcher/index.js';
+import { SwitcherAdapter, type AcDefaults } from './adapters/switcher/index.js';
 import { MqttAdapter } from './adapters/mqtt/index.js';
 import { startAdminServer, patchConsoleToBuffer } from './admin/index.js';
 
@@ -19,6 +19,7 @@ export interface DeviceConfig {
   room?: string;
   // switcher-specific
   token?: string;
+  acDefaults?: AcDefaults;  // Breeze: overrides the top-level acDefaults for this AC
   // mqtt-specific
   protocol?: 'z2m' | 'tasmota';
   mqttName?: string;
@@ -28,6 +29,7 @@ export interface AppConfig {
   matter: { storage: string; port?: number };
   admin: { port?: number; host?: string; maxBodyBytes?: number };
   mqtt?: { broker: string };
+  acDefaults?: AcDefaults;  // Breeze: fan/swing applied when an AC is turned on from off
   devices: DeviceConfig[];
 }
 
@@ -88,6 +90,7 @@ async function main(): Promise<void> {
       label: d.label,
       room: d.room,
       token: d.token,
+      acDefaults: { ...config.acDefaults, ...d.acDefaults },
     })));
     registry.register(switcherAdapter);
   }

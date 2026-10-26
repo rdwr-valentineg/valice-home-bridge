@@ -1,5 +1,7 @@
 export type DeviceType = 'light' | 'thermostat' | 'windowCovering' | 'contactSensor';
 
+export type FanLevel = 'auto' | 'low' | 'medium' | 'high';
+
 export interface DeviceState {
   reachable: boolean;
   // light
@@ -9,6 +11,9 @@ export interface DeviceState {
   mode?: 'cool' | 'heat' | 'fan' | 'off';
   setpoint?: number;        // °C
   currentTemp?: number;     // °C
+  // Breeze AC fan/swing, as reported by the device
+  fan?: FanLevel;
+  swing?: boolean;
   // windowCovering
   position?: number;        // 0=closed, 100=open
   // contactSensor
