@@ -129,7 +129,7 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
             power: cmd.value ? 'ON' : 'OFF',
             mode: deviceModeToSwitcher(dev.state.mode ?? 'cool'),
             fan_level: 'AUTO',
-            target_temperature: dev.state.setpoint ?? 24,
+            target_temp: Math.round(dev.state.setpoint ?? 24),
           });
         } else if (isLight) {
           // Circuit index is 1-based on the wire (aioswitcher: get_light_api_packet_index);
@@ -146,7 +146,7 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
             power: dev.state.on ? 'OFF' : 'ON',
             mode: deviceModeToSwitcher(dev.state.mode ?? 'cool'),
             fan_level: 'AUTO',
-            target_temperature: dev.state.setpoint ?? 24,
+            target_temp: Math.round(dev.state.setpoint ?? 24),
           });
         } else if (isLight) {
           await sw.set_light(!dev.state.on, 1);
@@ -160,7 +160,7 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
           power: cmd.value === 'off' ? 'OFF' : 'ON',
           mode: deviceModeToSwitcher(cmd.value),
           fan_level: 'AUTO',
-          target_temperature: dev.state.setpoint ?? 24,
+          target_temp: Math.round(dev.state.setpoint ?? 24),
         });
         break;
 
@@ -169,7 +169,7 @@ export class SwitcherAdapter extends EventEmitter implements Adapter {
           power: 'ON',
           mode: deviceModeToSwitcher(dev.state.mode ?? 'cool'),
           fan_level: 'AUTO',
-          target_temperature: cmd.value,
+          target_temp: Math.round(cmd.value),  // IR table has whole degrees only; Apple sends 0.5 steps
         });
         break;
 
@@ -317,7 +317,7 @@ interface SwitcherInstance {
   turn_on(): Promise<void>;
   turn_off(): Promise<void>;
   set_light(power: boolean, index: number): Promise<void>;
-  set_breeze_command(state: { power: string; mode: string; fan_level: string; target_temperature: number }): void;
+  set_breeze_command(state: { power: string; mode: string; fan_level: string; target_temp: number }): void;
   set_position(pos: number): void;
   close(): void;
 }
